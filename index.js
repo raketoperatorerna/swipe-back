@@ -2,10 +2,6 @@ import dotenv from 'dotenv';
 import express from "express";
 import mongoose from 'mongoose';
 
-import { join, dirname } from "path";
-import { Low, JSONFile } from "lowdb";
-import { fileURLToPath } from "url";
-
 import * as swipe from './models/swipe.js';
 import * as person from './models/person.js';
 import * as product from './models/product.js';
