@@ -40,16 +40,34 @@ class Scraper():
 class HMScraper(Scraper):
     """H&M Scraper."""
 
-    def __init__(self, url, folder):
+    def __init__(self, url, folder, ):
         super(HMScraper, self).__init__(url, folder)
 
     def get_images(self):
         return super(HMScraper, self).get_images()
 
 
+class ZalandoScraper(Scraper):
+    """Zalando Scraper"""
+
+    def __init__(self, url, folder):
+        super(ZalandoScraper, self).__init__(url, folder)
+
+    def get_images(self):
+        return super(ZalandoScraper, self).get_images()
+
+
 if __name__ == "__main__":
+    # Scrape from H&M
     sc = HMScraper(
-        url="https://www2.hm.com/sv_se/herr/produkter/se-alla.html?sort=stock&image-size=small&image=stillLife&offset=0&page-size=100",  # noqa: E501
+        url="https://www2.hm.com/sv_se/herr/produkter/se-alla.html?sort=stock&image-size=small&image=stillLife&offset=0&page-size=52",  # noqa: E501
+        folder="hm"
+    )
+    sc.get_images()
+
+    # Scrape from zalando
+    sc = ZalandoScraper(
+        url="https://www2.hm.com/sv_se/herr/produkter/se-alla.html?sort=stock&image-size=small&image=stillLife&offset=0&page-size=5",  # noqa: E501
         folder="hm"
     )
     sc.get_images()
