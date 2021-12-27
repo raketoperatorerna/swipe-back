@@ -13,8 +13,6 @@ class Scraper():
             "User-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36"
         }
 
-        
-
     def get_images(self):
         path = os.path.join(os.getcwd(), self.folder)
         try:
