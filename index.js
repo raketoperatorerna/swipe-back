@@ -12,9 +12,14 @@ app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
 dotenv.config();
+
+// Connect to mongodb
 mongoose.connect(process.env.dbURL)
     .then(() => {console.log('connected'); app.listen(process.env.PORT);})
-    .catch((err) => console.log(err));
+	.catch((err) => console.log(err));
+
+// Connect to s3
+
 
 app.post('/event', (req, res) => {
     const s = swipe.Swipe({
@@ -23,6 +28,7 @@ app.post('/event', (req, res) => {
 	action: req.body.action
     })
     s.save().then((result) => {
+	console.log(result)
 	res.send(result)
     }).catch((err) => console.log(err))
 })
@@ -32,9 +38,14 @@ async function getClothing() {
 
     // You can also use this syntax if you prefer
     const { products } = db.data;
-
+    
     return products[parseInt(Math.random() * products.length)];
 }
+
+app.get("/gets3", async function (req, res) {
+    const clothing = await getClothing();
+    res.send(clothing);
+});
 
 app.get("/get", async function (req, res) {
     const clothing = await getClothing();
