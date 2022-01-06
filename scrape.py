@@ -1,10 +1,14 @@
 import os
+import sys
 import requests
 import tempfile
 
 from boto3 import client
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+
+from cloudinary.uploader import upload
+from cloudinary.utils import cloudinary_url
 
 
 class Scraper():
@@ -50,7 +54,7 @@ class Scraper():
     def write_images(self):
         """Write images to disk."""
         for image_tag in self.image_tags:
-            
+
             name = image_tag['alt']
             link = image_tag['data-src']
             fn = self.path + "/" + name.replace(" ", "-").replace("/", "") + ".jpg" # noqa 3501
@@ -60,7 +64,7 @@ class Scraper():
                 f.write(im.content)
                 print("Writing: ", name)
 
-    def upload_images(self):
+    def upload_images_s3(self):
         """Push images to cloud."""
         for image_tag in self.image_tags:
 
@@ -75,6 +79,25 @@ class Scraper():
                     tf.name,
                     Bucket="tfc-garments",
                     Key=name
+                )
+
+    def upload_images_cloudinary(self):
+        for image_tag in self.image_tags:
+
+            link = image_tag['data-src']
+            image = requests.get("https:" + link, headers=self.headers).content
+
+            with tempfile.NamedTemporaryFile() as tf:
+                tf.write(image)
+                tf.seek(0)
+                response = upload(tf.name, tags="hej")
+
+                url, options = cloudinary_url(
+                    response['public_id'],
+                    format=response['format'],
+                    width=200,
+                    height=150,
+                    crop="fill"
                 )
 
 
@@ -101,8 +124,8 @@ class ZalandoScraper(Scraper):
 if __name__ == "__main__":
     # Scrape from H&M
     sc = HMScraper(
-        url="https://www2.hm.com/sv_se/herr/produkter/se-alla.html?sort=stock&image-size=small&image=stillLife&offset=0&page-size=100",  # noqa: E501
+        url="https://www2.hm.com/sv_se/herr/produkter/se-alla.html?sort=stock&image-size=small&image=stillLife&offset=0&page-size=10",  # noqa: E501
         folder="hm"
     )
     sc.get_images()
-    sc.upload_images()
+    sc.upload_images_cloudinary()
