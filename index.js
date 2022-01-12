@@ -1,4 +1,9 @@
-import { S3 } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import {
+    S3Client,
+    GetObjectCommand,
+    ListObjectsCommand
+} from "@aws-sdk/client-s3";
 
 import dotenv from 'dotenv';
 import express from "express";
@@ -21,11 +26,7 @@ mongoose.connect(process.env.dbURL)
 	.catch((err) => console.log(err));
 
 // Connect to s3
-const s3 = new S3({
-    region: 'eu-north-1',
-    accessKeyId: process.env.AWS_KEY_ID,
-    secretAccessKey: process.env.AWS_KEY_PASS,
-}) 
+const client = new S3Client({ region: "eu-north-1" });
 
 app.post('/event', (req, res) => {
     const s = swipe.Swipe({
@@ -37,6 +38,29 @@ app.post('/event', (req, res) => {
 	res.send(result)
     }).catch((err) => console.log(err))
 })
+
+async function getImages() {
+
+    var params = { Bucket: "tfc-garments", Prefix: "2" };
+    const command = new ListObjectsCommand(params);
+    return getSignedUrl(client, command, { expiresIn: 3600 });
+}
+
+app.get("/getimages", async function(req, res, next) {
+    const imgsUrl = await getImages();
+    res.send(imgsUrl)
+});
+
+async function getImage(key) {
+    var params = { Bucket: "tfc-garments", Key: key };
+    const command = new GetObjectCommand(params);
+    return getSignedUrl(client, command, { expiresIn: 3600 });
+}
+
+app.get("/getimage/:key", async function(req, res, next) {
+    const imgUrl = await getImage(req.params.key);
+    res.send(imgUrl)
+});
 
 async function getClothing() {
     await db.read();
@@ -56,18 +80,3 @@ app.get("/getdatabase", async function (req, res) {
     await db.read();
     res.send(db.data);
 });
-
-app.get("/getimage", function(req, res, next) {
-    var params = { Bucket: "tfc-garments", Key: "10-pack mid trunks i bomull" };
-
-    s3.getObject(params, function(err, data) {
-	// Handle any error and exit
-	if (err)
-            return err;
-	// No error happened
-	// Convert Body from a Buffer to a String
-	console.log(data.Body)
-	let objectData = data.Body.toString('utf-8'); // Use the encoding necessary
-    });
-});
-

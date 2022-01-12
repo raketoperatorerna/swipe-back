@@ -84,13 +84,14 @@ class Scraper():
     def upload_images_cloudinary(self):
         for image_tag in self.image_tags:
 
+            name = image_tag['alt']
             link = image_tag['data-src']
             image = requests.get("https:" + link, headers=self.headers).content
 
             with tempfile.NamedTemporaryFile() as tf:
                 tf.write(image)
                 tf.seek(0)
-                response = upload(tf.name, tags="hej")
+                response = upload(tf.name, folder = self.folder)
 
                 url, options = cloudinary_url(
                     response['public_id'],
