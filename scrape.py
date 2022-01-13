@@ -1,4 +1,6 @@
+
 import os
+import time
 import requests
 import tempfile
 
@@ -11,7 +13,6 @@ from dotenv import load_dotenv
 from uuid import uuid4
 
 from selenium import webdriver
-from selenium.webdriver.common.keys import Keys
 
 
 class Scraper():
@@ -42,12 +43,8 @@ class Scraper():
 
     def get_garment_page_urls(self, base_url: str,
                               url: Optional[str] = None,
-                              image_listing_tag: str = "products-listing small"):
+                              image_listing_tag: str = "products-listing small"): # noqa 3501
         """Scrape page urls."""
-        try:
-            os.mkdir(self.path)
-        except FileExistsError:
-            pass
         # Fetch image tags
         r = requests.get(self.garments_listing_url, headers=self.headers)
         if r.status_code != 200:
@@ -75,57 +72,10 @@ class Scraper():
         garment_urls = self.get_garment_page_urls(base_url=base_url)
 
         for gurl in garment_urls:
+            # Transform step
+            self.transform(gurl)
 
-            garment_id = uuid4().hex
-
-            driver = webdriver.Chrome("/Users/ludvigwarnberggerdin/drivers/chromedriver")
-            driver.get(gurl)
-
-            html = driver.page_source
-
-            r = requests.get(gurl, headers=self.headers)
-            ds = BeautifulSoup(r.text, "html.parser").find(
-                "div",
-                attrs={"class": images_listing_tag}
-            )
-            # Product label
-            label_element = ds.find(
-                "h1",
-                attrs={"class": "primary product-item-headline"}
-            )
-            label = (
-                label_element.contents[0]
-                             .replace("\t", "")
-                             .lstrip()
-                             .lower()
-                             .replace(" ", "_")
-            )
-            # Product description
-            desc = ds.find("p", attrs={"class": "pdp-description-text"})
-            # Images
-            srcs_html = (
-                ds.find_all(
-                    "figure",
-                    # attrs={"class": "product-detail-thumbnail-image"}
-                )
-            )
-            print(srcs_html)
-            srcs = [
-                x["src"]
-                for x
-                in srcs_html
-            ]
-            imgs_d = {uuid4().hex: "https:" + src for src in srcs}
-            meta_data = {
-                "label": label,
-                "desc": desc.contents[0],
-                "imgs": imgs_d
-            }
-            self.garments[garment_id] = meta_data
-            # img_urls = [x["src"] for x in ds]
-
-            self.upload_data_mongo()
-            self.upload_images_s3()
+        self.upload_images_s3()
 
     def write_images(self):
         """Write images to disk."""
@@ -147,6 +97,7 @@ class Scraper():
     def upload_images_s3(self):
         """Push images to cloud."""
         for gid in self.garments:
+
             md = self.garments[gid]
             imgs = md["imgs"]
 
@@ -163,6 +114,9 @@ class Scraper():
                         Key=self.folder + "/" + gid + "/" + iid,
                         ExtraArgs={'Metadata': {'garment_id': gid}}
                     )
+
+    def etl(self):
+        pass
 
 
 class HMScraper(Scraper):
@@ -181,6 +135,57 @@ class HMScraper(Scraper):
             base_url=self.base_url,
             images_listing_tag="module product-description sticky-wrapper"
         )
+
+    def transform(self, url: str):
+        """Transforms the input html to valid load-format."""
+        garment_id = uuid4().hex
+
+        driver = webdriver.Chrome(os.getenv("DRIVER_PATH"))
+        driver.get(url)
+        html = driver.page_source
+
+        # Make sure content is loaded
+        time.sleep(1)
+
+        garment_page = BeautifulSoup(html, "html.parser").find(
+            "div",
+            attrs={"class": "module product-description sticky-wrapper"}
+        )
+        # Product label
+        label_element = garment_page.find(
+            "h1",
+            attrs={"class": "primary product-item-headline"}
+        )
+        label = (
+            label_element.contents[0]
+                         .replace("\t", "")
+                         .lstrip()
+                         .lower()
+                         .replace(" ", "_")
+        )
+        # Product description
+        desc = garment_page.find("p", attrs={"class": "pdp-description-text"})
+        # Images
+        srcs_html = (
+            garment_page.find_all(
+                "img",
+                attrs={"class": "product-detail-thumbnail-image"}
+            )
+        )
+        srcs = [
+            x["src"]
+            for x
+            in srcs_html
+        ]
+        imgs_d = {uuid4().hex: "https:" + src for src in srcs}
+        meta_data = {
+            "label": label,
+            "desc": desc.contents[0],
+            "imgs": imgs_d
+        }
+        self.garments[garment_id] = meta_data
+
+        driver.close()
 
 
 class ZalandoScraper(Scraper):
