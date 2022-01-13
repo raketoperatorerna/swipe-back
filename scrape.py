@@ -14,6 +14,8 @@ from uuid import uuid4
 
 from selenium import webdriver
 
+from pymongo import MongoClient
+
 
 class Scraper():
     """Base class for scrapers."""
@@ -35,15 +37,17 @@ class Scraper():
             aws_secret_access_key=os.getenv("AWS_KEY_PASS")
         )
 
+        self.mdb = MongoClient(os.getenv("MONGODB-URL")).tfc
+
         self.image_tags = None
         self.garment_urls = None
-        self.garments = {}
+        self.garments = []
 
         self.path = os.path.join(os.getcwd(), folder)
 
     def get_garment_page_urls(self, base_url: str,
-                              url: Optional[str] = None,
-                              image_listing_tag: str = "products-listing small"): # noqa 3501
+                              image_listing_tag: str,
+                              url: Optional[str] = None):
         """Scrape page urls."""
         # Fetch image tags
         r = requests.get(self.garments_listing_url, headers=self.headers)
@@ -64,18 +68,22 @@ class Scraper():
             )
         ]
 
-    def get_garment_info(self, base_url: str, images_listing_tag: str):
-        """Gets data about each garment.
-
-        Meta data such as image urls
-        """
-        garment_urls = self.get_garment_page_urls(base_url=base_url)
+    def get_garment_info(self, base_url: str,
+                         image_listing_tag: str):
+        """Gets data about each garment."""
+        garment_urls = self.get_garment_page_urls(
+            base_url=base_url,
+            image_listing_tag=image_listing_tag
+        )
 
         for gurl in garment_urls:
             # Transform step
             self.transform(gurl)
 
-        self.upload_images_s3()
+        # Upload image links and garment data to mongo
+        self.load_mongo()
+        # Upload images to s3
+        self.load_s3()
 
     def write_images(self):
         """Write images to disk."""
@@ -90,18 +98,18 @@ class Scraper():
                 f.write(im.content)
                 print("Writing: ", name)
 
-    def upload_data_mongo(self):
-        """Uploads metadata about images to mongo"""
-        pass
+    def load_mongo(self):
+        """Uploads metadata about images to mongo."""
+        self.mdb.garments.insert_many(self.garments)
 
-    def upload_images_s3(self):
+    def load_s3(self):
         """Push images to cloud."""
-        for gid in self.garments:
+        for garment in self.garments:
 
-            md = self.garments[gid]
-            imgs = md["imgs"]
+            gid = garment["garment_id"]
+            images = garment["garment_urls"]
 
-            for iid, url in imgs.items():
+            for iid, url in images.items():
 
                 image = requests.get(url, headers=self.headers).content
 
@@ -127,13 +135,16 @@ class HMScraper(Scraper):
 
         self.base_url = "https://www2.hm.com/"
 
-    def get_images(self):
-        return super(HMScraper, self).get_images(base_url=self.base_url)
+    def get_garment_page_urls(self, base_url: str, image_listing_tag):
+        return super(HMScraper, self).get_garment_page_urls(
+            base_url=self.base_url,
+            image_listing_tag="products-listing small"
+        )
 
     def get_garment_info(self):
         return super(HMScraper, self).get_garment_info(
             base_url=self.base_url,
-            images_listing_tag="module product-description sticky-wrapper"
+            image_listing_tag="products-listing small"
         )
 
     def transform(self, url: str):
@@ -149,41 +160,52 @@ class HMScraper(Scraper):
 
         garment_page = BeautifulSoup(html, "html.parser").find(
             "div",
-            attrs={"class": "module product-description sticky-wrapper"}
+            class_="module product-description sticky-wrapper"
         )
         # Product label
-        label_element = garment_page.find(
+        label = garment_page.find(
             "h1",
-            attrs={"class": "primary product-item-headline"}
-        )
-        label = (
-            label_element.contents[0]
-                         .replace("\t", "")
-                         .lstrip()
-                         .lower()
-                         .replace(" ", "_")
-        )
+            class_="primary product-item-headline"
+        ).contents[0].replace("\t", "").lstrip()
+        # Product price
+        price = garment_page.find(
+            "div",
+            class_="ProductPrice-module--productItemPrice__2i2Hc"   
+        ).find("span").contents[0]
+        price = int(price.split(",")[0])
+        priced = {"price": price, "currency": "SEK"}
         # Product description
-        desc = garment_page.find("p", attrs={"class": "pdp-description-text"})
+        desc = garment_page.find(
+            "p",
+            class_="pdp-description-text"
+        ).contents[0]
+        # Main image
+        main_img_element = garment_page.find(
+            "div",
+            class_="product-detail-main-image-container"
+        ).find("img")
+        main_src = [main_img_element["src"]]
         # Images
-        srcs_html = (
+        img_elements = (
             garment_page.find_all(
                 "img",
-                attrs={"class": "product-detail-thumbnail-image"}
+                class_="product-detail-thumbnail-image"
             )
         )
-        srcs = [
+        srcs = main_src + [
             x["src"]
             for x
-            in srcs_html
+            in img_elements
         ]
-        imgs_d = {uuid4().hex: "https:" + src for src in srcs}
-        meta_data = {
-            "label": label,
-            "desc": desc.contents[0],
-            "imgs": imgs_d
+        srcs = {uuid4().hex: "https:" + src for src in srcs}
+        garment = {
+            "garment_id": garment_id,
+            "garment_price": priced,
+            "garment_label": label,
+            "garment_desc": desc,
+            "garment_urls": srcs
         }
-        self.garments[garment_id] = meta_data
+        self.garments.append(garment)
 
         driver.close()
 
@@ -192,6 +214,7 @@ class ZalandoScraper(Scraper):
     """Zalando Scraper"""
 
     def __init__(self, garments_listing_url: str, folder: str):
+
         super(ZalandoScraper, self).__init__(garments_listing_url, folder)
 
     def get_images(self):
