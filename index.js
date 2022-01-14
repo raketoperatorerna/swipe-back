@@ -10,8 +10,7 @@ import express from "express";
 import mongoose from 'mongoose';
 
 import * as swipe from './models/swipe.js';
-import * as person from './models/person.js';
-import * as product from './models/product.js';
+import * as garment from './models/garment.js';
 
 const app = express();
 
@@ -21,7 +20,7 @@ app.use(express.json());
 dotenv.config();
 
 // Connect to mongodb
-mongoose.connect(process.env.dbURL)
+mongoose.connect(process.env.MONGODB_URL)
 	.then(() => {console.log('connected'); app.listen(process.env.PORT);})
 	.catch((err) => console.log(err));
 
@@ -39,44 +38,40 @@ app.post('/event', (req, res) => {
     }).catch((err) => console.log(err))
 })
 
-async function getImages() {
-
-    var params = { Bucket: "tfc-garments", Prefix: "2" };
-    const command = new ListObjectsCommand(params);
-    return getSignedUrl(client, command, { expiresIn: 3600 });
+function getGarments() {
+    const garments = garment.Garment.find({})
+    return garments
 }
 
-app.get("/getimages", async function(req, res, next) {
-    const imgsUrl = await getImages();
-    res.send(imgsUrl)
+app.get("/getgarments", async function(req, res, next) {
+    const garments = await getGarments();
+    res.send(garments)
 });
 
-async function getImage(key) {
-    var params = { Bucket: "tfc-garments", Key: key };
+app.get("/getrandomgarment", async function(req, res, next) {
+    const garments = await getGarments();
+    const randomGarmentObject = garments[parseInt(Math.random() * garments.length)]
+    res.send(randomGarmentObject)
+});
+
+async function getImage(gid, iid) {
+    var params = { Bucket: "tfc-garments", Key: `hm/${gid}/${iid}` };
     const command = new GetObjectCommand(params);
     return getSignedUrl(client, command, { expiresIn: 3600 });
 }
 
-app.get("/getimage/:key", async function(req, res, next) {
-    const imgUrl = await getImage(req.params.key);
+app.get("/getimage", async function(req, res, next) {
+    const imgUrl = await getImage(req.query.gid, req.query.iid);
     res.send(imgUrl)
 });
 
-async function getClothing() {
-    await db.read();
-
-    // You can also use this syntax if you prefer
-    const { products } = db.data;
-    
-    return products[parseInt(Math.random() * products.length)];
+async function getGarmentImages(gid) {
+    var params = { Bucket: "tfc-garments", Prefix: `hm/${gid}/` };
+    const command = new ListObjectsCommand(params);
+    return getSignedUrl(client, command, { expiresIn: 3600 });
 }
 
-app.get("/get", async function (req, res) {
-    const clothing = await getClothing();
-    res.send(clothing);
-});
-
-app.get("/getdatabase", async function (req, res) {
-    await db.read();
-    res.send(db.data);
+app.get("/getimageS3", async function(req, res, next) {
+    const imgUrls = await getGarmentImages(req.query.gid);
+    res.send(imgUrls)
 });
