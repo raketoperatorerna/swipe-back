@@ -37,7 +37,7 @@ class Scraper():
             aws_secret_access_key=os.getenv("AWS_KEY_PASS")
         )
 
-        self.mdb = MongoClient(os.getenv("MONGODB-URL")).tfc
+        self.mdb = MongoClient(os.getenv("MONGODB_URL")).tfc
 
         self.image_tags = None
         self.garment_urls = None
@@ -57,15 +57,11 @@ class Scraper():
             "ul",
             attrs={"class": image_listing_tag}
         )
-        self.image_tags = garments.find_all("img")
 
         return [
             base_url + x["href"]
             for x
-            in garments.find_all(
-                "a",
-                attrs={"class": "item-link"}
-            )
+            in garments.find_all("a", class_="item-link")
         ]
 
     def get_garment_info(self, base_url: str,
@@ -107,10 +103,12 @@ class Scraper():
         for garment in self.garments:
 
             gid = garment["garment_id"]
-            images = garment["garment_urls"]
+            images = garment["garment_images"]
 
-            for iid, url in images.items():
+            for d in images:
 
+                iid = d["image_id"]
+                url = d["image_url"]
                 image = requests.get(url, headers=self.headers).content
 
                 with tempfile.NamedTemporaryFile() as tf:
@@ -173,7 +171,7 @@ class HMScraper(Scraper):
             class_="ProductPrice-module--productItemPrice__2i2Hc"   
         ).find("span").contents[0]
         price = int(price.split(",")[0])
-        priced = {"price": price, "currency": "SEK"}
+        price_d = {"price": price, "currency": "SEK"}
         # Product description
         desc = garment_page.find(
             "p",
@@ -184,7 +182,10 @@ class HMScraper(Scraper):
             "div",
             class_="product-detail-main-image-container"
         ).find("img")
-        main_src = [main_img_element["src"]]
+        main_src = [{
+            "image_id": uuid4().hex,
+            "image_url": "https:" + main_img_element["src"]
+        }]
         # Images
         img_elements = (
             garment_page.find_all(
@@ -192,18 +193,18 @@ class HMScraper(Scraper):
                 class_="product-detail-thumbnail-image"
             )
         )
-        srcs = main_src + [
-            x["src"]
-            for x
-            in img_elements
-        ]
-        srcs = {uuid4().hex: "https:" + src for src in srcs}
+        srcs = [x["src"] for x in img_elements]
+        srcs_d = main_src + [{
+            "image_id": uuid4().hex,
+            "image_url": "https:" + src,
+        } for src in srcs]
+        
         garment = {
             "garment_id": garment_id,
-            "garment_price": priced,
             "garment_label": label,
             "garment_desc": desc,
-            "garment_urls": srcs
+            "garment_price": price_d,
+            "garment_images": srcs_d
         }
         self.garments.append(garment)
 
@@ -224,7 +225,7 @@ class ZalandoScraper(Scraper):
 if __name__ == "__main__":
     # Scrape from H&M
     sc = HMScraper(
-        garments_listing_url="https://www2.hm.com/sv_se/herr/produkter/se-alla.html?sort=stock&image-size=small&image=stillLife&offset=0&page-size=2",  # noqa: E501
+        garments_listing_url="https://www2.hm.com/sv_se/herr/produkter/se-alla.html?sort=stock&image-size=small&image=stillLife&offset=0&page-size=3",  # noqa: E501
         folder="hm"
     )
     sc.get_garment_info()
