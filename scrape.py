@@ -1,21 +1,27 @@
+
 import os
-import sys
+import time
 import requests
 import tempfile
+
+from typing import Optional
 
 from boto3 import client
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
-from cloudinary.uploader import upload
-from cloudinary.utils import cloudinary_url
+from uuid import uuid4
+
+from selenium import webdriver
+
+from pymongo import MongoClient
 
 
 class Scraper():
     """Base class for scrapers."""
 
-    def __init__(self, url: str, folder: str):
-        self.url = url
+    def __init__(self, garments_listing_url: str, folder: str):
+        self.garments_listing_url = garments_listing_url
         self.folder = folder
 
         load_dotenv()
@@ -27,29 +33,53 @@ class Scraper():
         self.s3 = client(
             service_name="s3",
             region_name="eu-north-1",
-            aws_access_key_id=os.getenv("AWS-KEY-ID"),
-            aws_secret_access_key=os.getenv("AWS-KEY-PASS")
+            aws_access_key_id=os.getenv("AWS_KEY_ID"),
+            aws_secret_access_key=os.getenv("AWS_KEY_PASS")
         )
 
+        self.mdb = MongoClient(os.getenv("MONGODB_URL")).tfc
+
         self.image_tags = None
+        self.garment_urls = None
+        self.garments = []
 
         self.path = os.path.join(os.getcwd(), folder)
 
-    def get_images(self, image_listing_tag: str = "products-listing small"):
-        """Scrape images."""
-        try:
-            os.mkdir(self.path)
-        except FileExistsError:
-            pass
+    def get_garment_page_urls(self, base_url: str,
+                              image_listing_tag: str,
+                              url: Optional[str] = None):
+        """Scrape page urls."""
         # Fetch image tags
-        r = requests.get(self.url, headers=self.headers)
+        r = requests.get(self.garments_listing_url, headers=self.headers)
         if r.status_code != 200:
             raise Exception("Request not succesful.")
         garments = BeautifulSoup(r.text, 'html.parser').find(
             "ul",
             attrs={"class": image_listing_tag}
         )
-        self.image_tags = garments.find_all("img")
+
+        return [
+            base_url + x["href"]
+            for x
+            in garments.find_all("a", class_="item-link")
+        ]
+
+    def get_garment_info(self, base_url: str,
+                         image_listing_tag: str):
+        """Gets data about each garment."""
+        garment_urls = self.get_garment_page_urls(
+            base_url=base_url,
+            image_listing_tag=image_listing_tag
+        )
+
+        for gurl in garment_urls:
+            # Transform step
+            self.transform(gurl)
+
+        # Upload image links and garment data to mongo
+        self.load_mongo()
+        # Upload images to s3
+        self.load_s3()
 
     def write_images(self):
         """Write images to disk."""
@@ -64,58 +94,129 @@ class Scraper():
                 f.write(im.content)
                 print("Writing: ", name)
 
-    def upload_images_s3(self):
+    def load_mongo(self):
+        """Uploads metadata about images to mongo."""
+        self.mdb.garments.insert_many(self.garments)
+
+    def load_s3(self):
         """Push images to cloud."""
-        for image_tag in self.image_tags:
+        for garment in self.garments:
 
-            name = image_tag['alt']
-            link = image_tag['data-src']
-            image = requests.get("https:" + link, headers=self.headers).content
+            gid = garment["garment_id"]
+            images = garment["garment_images"]
 
-            with tempfile.NamedTemporaryFile() as tf:
-                tf.write(image)
-                tf.seek(0)
-                self.s3.upload_file(
-                    tf.name,
-                    Bucket="tfc-garments",
-                    Key=name
-                )
+            for d in images:
 
-    def upload_images_cloudinary(self):
-        for image_tag in self.image_tags:
+                iid = d["image_id"]
+                url = d["image_url"]
+                image = requests.get(url, headers=self.headers).content
 
-            link = image_tag['data-src']
-            image = requests.get("https:" + link, headers=self.headers).content
+                with tempfile.NamedTemporaryFile() as tf:
+                    tf.write(image)
+                    tf.seek(0)
+                    self.s3.upload_file(
+                        tf.name,
+                        Bucket="tfc-garments",
+                        Key=self.folder + "/" + gid + "/" + iid,
+                        ExtraArgs={'Metadata': {'garment_id': gid}}
+                    )
 
-            with tempfile.NamedTemporaryFile() as tf:
-                tf.write(image)
-                tf.seek(0)
-                response = upload(tf.name, tags="hej")
-
-                url, options = cloudinary_url(
-                    response['public_id'],
-                    format=response['format'],
-                    width=200,
-                    height=150,
-                    crop="fill"
-                )
+    def etl(self):
+        pass
 
 
 class HMScraper(Scraper):
     """H&M Scraper."""
 
-    def __init__(self, url: str, folder: str):
-        super(HMScraper, self).__init__(url, folder)
+    def __init__(self, garments_listing_url: str, folder: str):
+        super(HMScraper, self).__init__(garments_listing_url, folder)
 
-    def get_images(self):
-        return super(HMScraper, self).get_images()
+        self.base_url = "https://www2.hm.com/"
+
+    def get_garment_page_urls(self, base_url: str, image_listing_tag):
+        return super(HMScraper, self).get_garment_page_urls(
+            base_url=self.base_url,
+            image_listing_tag="products-listing small"
+        )
+
+    def get_garment_info(self):
+        return super(HMScraper, self).get_garment_info(
+            base_url=self.base_url,
+            image_listing_tag="products-listing small"
+        )
+
+    def transform(self, url: str):
+        """Transforms the input html to valid load-format."""
+        garment_id = uuid4().hex
+
+        driver = webdriver.Chrome(os.getenv("DRIVER_PATH"))
+        driver.get(url)
+        html = driver.page_source
+
+        # Make sure content is loaded
+        time.sleep(1)
+
+        garment_page = BeautifulSoup(html, "html.parser").find(
+            "div",
+            class_="module product-description sticky-wrapper"
+        )
+        # Product label
+        label = garment_page.find(
+            "h1",
+            class_="primary product-item-headline"
+        ).contents[0].replace("\t", "").lstrip()
+        # Product price
+        price = garment_page.find(
+            "div",
+            class_="ProductPrice-module--productItemPrice__2i2Hc"   
+        ).find("span").contents[0]
+        price = int(price.split(",")[0])
+        price_d = {"price": price, "currency": "SEK"}
+        # Product description
+        desc = garment_page.find(
+            "p",
+            class_="pdp-description-text"
+        ).contents[0]
+        # Main image
+        main_img_element = garment_page.find(
+            "div",
+            class_="product-detail-main-image-container"
+        ).find("img")
+        main_src = [{
+            "image_id": uuid4().hex,
+            "image_url": "https:" + main_img_element["src"]
+        }]
+        # Images
+        img_elements = (
+            garment_page.find_all(
+                "img",
+                class_="product-detail-thumbnail-image"
+            )
+        )
+        srcs = [x["src"] for x in img_elements]
+        srcs_d = main_src + [{
+            "image_id": uuid4().hex,
+            "image_url": "https:" + src,
+        } for src in srcs]
+        
+        garment = {
+            "garment_id": garment_id,
+            "garment_label": label,
+            "garment_desc": desc,
+            "garment_price": price_d,
+            "garment_images": srcs_d
+        }
+        self.garments.append(garment)
+
+        driver.close()
 
 
 class ZalandoScraper(Scraper):
     """Zalando Scraper"""
 
-    def __init__(self, url: str, folder: str):
-        super(ZalandoScraper, self).__init__(url, folder)
+    def __init__(self, garments_listing_url: str, folder: str):
+
+        super(ZalandoScraper, self).__init__(garments_listing_url, folder)
 
     def get_images(self):
         return super(ZalandoScraper, self).get_images()
@@ -124,8 +225,7 @@ class ZalandoScraper(Scraper):
 if __name__ == "__main__":
     # Scrape from H&M
     sc = HMScraper(
-        url="https://www2.hm.com/sv_se/herr/produkter/se-alla.html?sort=stock&image-size=small&image=stillLife&offset=0&page-size=10",  # noqa: E501
+        garments_listing_url="https://www2.hm.com/sv_se/herr/produkter/se-alla.html?sort=stock&image-size=small&image=stillLife&offset=0&page-size=3",  # noqa: E501
         folder="hm"
     )
-    sc.get_images()
-    sc.upload_images_cloudinary()
+    sc.get_garment_info()
